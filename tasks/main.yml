@@ -27,14 +27,30 @@
   tags:
     - wg-install
 
+- name: enable ip forwarding
+  sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_set: yes
+    state: present
+    reload: yes
+  vars:
+    sysctl_entries:
+      net.ipv4.ip_forward: 1
+      net.ipv6.conf.all.forwarding: 1
+  with_dict: "{{ sysctl_entries }}"
+  when: wireguard_ip_forward
+
 - name: Set WireGuard IP (without mask)
   set_fact:
     wireguard_ip: "{{ wireguard_address.split('/')[0] }}"
+  when: wireguard_manage
 
 - name: Register if config/private key already exists on target host
   stat:
     path: "{{ wireguard_remote_directory }}/{{ wireguard_interface }}.conf"
   register: config_file_stat
+  when: wireguard_manage
   tags:
     - wg-generate-keys
     - wg-config
@@ -51,7 +67,7 @@
       private_key: "{{ wg_private_key_result.stdout }}"
     tags:
       - wg-generate-keys
-  when: not config_file_stat.stat.exists
+  when: wireguard_manage and not config_file_stat.stat.exists
 
 - block:
   - name: Read WireGuard config file
@@ -66,7 +82,7 @@
       private_key: "{{ wg_config['content'] | b64decode | regex_findall('PrivateKey = (.*)') | first }}"
     tags:
       - wg-config
-  when: config_file_stat.stat.exists
+  when: wireguard_manage and config_file_stat.stat.exists
 
 - name: Derive WireGuard public key
   shell: "echo '{{ private_key }}' | wg pubkey" # noqa 306
@@ -78,6 +94,7 @@
 - name: Set public key fact
   set_fact:
     public_key: "{{ wg_public_key_result.stdout }}"
+  when: wireguard_manage
   tags:
     - wg-config
 
@@ -96,6 +113,7 @@
     owner: root
     group: root
     mode: 0600
+  when: wireguard_manage
   tags:
     - wg-config
   notify:
@@ -121,12 +139,5 @@
     name: "wg-quick@{{ wireguard_interface }}"
     state: started
     enabled: yes
+  when: wireguard_manage
 
-- name: Delete local cert directory
-  file:
-    path: "{{ wireguard_cert_directory }}"
-    state: absent
-  delegate_to: localhost
-  run_once: true
-  tags:
-    - wg-config
